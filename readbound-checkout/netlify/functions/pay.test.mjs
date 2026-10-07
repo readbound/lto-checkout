@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { handle } from './pay.mjs';
+const origin='https://checkout.example.com';
+const env={CHECKOUT_ORIGIN:origin,WHOP_API_KEY:'test-only',PAYMENTS_ENABLED:'true'};
+const payload={confirmationToken:'ctok_test12345',orderId:'01234567-0123-4123-8123-012345678901'};
+const request=(body=payload,requestOrigin=origin)=>new Request(origin+'/api/pay',{method:'POST',headers:{origin:requestOrigin,'Content-Type':'application/json'},body:JSON.stringify(body)});
+test('rejects another origin without contacting payment API',async()=>{assert.equal((await handle(request(payload,'https://attacker.example'),env,()=>{throw Error('must not call')})).status,403);});
+test('rejects browser price or bump injection',async()=>{assert.equal((await handle(request({...payload,amount:1}),env)).status,400);});
+test('disabled payments fail closed',async()=>{assert.equal((await handle(request(),{...env,PAYMENTS_ENABLED:'false'})).status,503);});
+test('server fixes plan and account and limits returned data',async()=>{let sent,options;const response=await handle(request(),env,()=>({payments:{create:async(body,opts)=>{sent=body;options=opts;return{id:'pay_test',status:'requires_action',client_secret:'payment-scoped',private:'hidden'};}}}));assert.equal(sent.plan_id,'plan_9OdViY3cuqEzT');assert.equal(sent.account_id,'biz_le2xpTfOF4nBmA');assert.match(options.headers['Idempotency-Key'],/^[a-f0-9]{64}$/);assert.deepEqual(await response.json(),{id:'pay_test',status:'requires_action',client_secret:'payment-scoped'});});
